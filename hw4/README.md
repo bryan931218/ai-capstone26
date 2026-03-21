@@ -7,7 +7,6 @@ In your original ai-capstone directory, `git pull` to get new `hw4` directory.
 
 ## Installation
 
-Follow the installation instruction in https://github.com/google-research/ravens
 
 There are three ways to create your environment(choose one for your hw4):
 
