@@ -15,6 +15,15 @@ CX, CY = IMG_W / 2.0, IMG_H / 2.0
 DEPTH_SCALE = 1000.0
 
 
+def sorted_frame_files(pattern):
+    files = glob.glob(pattern)
+    def frame_index(path):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        return int(stem) if stem.isdigit() else stem
+
+    return sorted(files, key=frame_index)
+
+
 def decode_depth_to_meters(depth_image):
     """
     Decode saved depth image into metric depth (meters).
@@ -39,14 +48,14 @@ def depth_image_to_point_cloud(rgb_image, depth_image):
     depth = decode_depth_to_meters(depth_image)
 
     v_coords, u_coords = np.indices(depth.shape)
-    valid = depth > 1e-6
+    # Ignore invalid and very far depth points to reduce outliers.
+    valid = (depth > 1e-3) & (depth < 8.0)
 
     z = depth[valid]
     u = u_coords[valid]
     v = v_coords[valid]
 
-    # Habitat camera faces -Z in camera frame.
-    z = -z
+    # Use Open3D's conventional camera frame (+Z forward) for reconstruction.
     x = (u - CX) * z / FX
     y = (v - CY) * z / FY
 
@@ -138,14 +147,14 @@ def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, arg
 
 
 def reconstruct(args):
-    voxel_size = 0.25
-    icp_threshold = 0.6
+    voxel_size = 0.10
+    icp_threshold = 0.30
 
     rgb_dir = os.path.join(args.data_root, "rgb")
     depth_dir = os.path.join(args.data_root, "depth")
 
-    rgb_files = sorted(glob.glob(os.path.join(rgb_dir, "*.png")))
-    depth_files = sorted(glob.glob(os.path.join(depth_dir, "*.png")))
+    rgb_files = sorted_frame_files(os.path.join(rgb_dir, "*.png"))
+    depth_files = sorted_frame_files(os.path.join(depth_dir, "*.png"))
 
     gt_pose_path = os.path.join(args.data_root, "GT_pose.npy")
     gt_poses = []
