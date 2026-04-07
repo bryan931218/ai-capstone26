@@ -77,13 +77,6 @@ def local_icp_algorithm(source_down, target_down, trans_init, threshold):
     )
 
 
-def is_reasonable_transform(T, max_translation=0.7, max_rotation_deg=60.0):
-    """Reject catastrophic frame-to-frame jumps."""
-    t = np.linalg.norm(T[:3, 3])
-    rot = R.from_matrix(T[:3, :3]).magnitude() * (180.0 / np.pi)
-    return t <= max_translation and rot <= max_rotation_deg
-
-
 def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, args):
     """Task 3: draw trajectories and compute Mean L2 position error."""
     pred = np.asarray(predicted_cam_poses)
@@ -130,7 +123,7 @@ def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, arg
 
 
 def reconstruct(args):
-    voxel_size = 0.12
+    voxel_size = 0.25
     rgb_dir = os.path.join(args.data_root, "rgb")
     depth_dir = os.path.join(args.data_root, "depth")
 
@@ -180,46 +173,31 @@ def reconstruct(args):
         source_down, source_fpfh = preprocess_point_cloud(source, voxel_size)
         target_down, target_fpfh = preprocess_point_cloud(target, voxel_size)
 
-        distance_threshold = voxel_size * 2.0
-        # RANSAC can become unstable on low-overlap frames. Use non-mutual matching
-        # (fewer warnings) and fallback to identity init when global alignment is weak.
-        if len(source_down.points) < 30 or len(target_down.points) < 30:
-            ransac_init = np.eye(4)
-        else:
-            ransac_result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
-                source_down,
-                target_down,
-                source_fpfh,
-                target_fpfh,
-                mutual_filter=False,
-                max_correspondence_distance=distance_threshold,
-                estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
-                ransac_n=4,
-                checkers=[
-                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
-                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
-                ],
-                criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(50000, 0.999),
-            )
-            ransac_init = (
-                ransac_result.transformation
-                if (ransac_result.fitness > 0.05 and ransac_result.inlier_rmse < 0.2)
-                else np.eye(4)
-            )
+        distance_threshold = voxel_size * 1.5
+        ransac_result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+            source_down,
+            target_down,
+            source_fpfh,
+            target_fpfh,
+            mutual_filter=True,
+            max_correspondence_distance=distance_threshold,
+            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+            ransac_n=4,
+            checkers=[
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
+            ],
+            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999),
+        )
 
         icp_result = local_icp_algorithm(
             source_down,
             target_down,
-            ransac_init,
+            ransac_result.transformation,
             distance_threshold,
         )
 
         T_curr_to_prev = icp_result.transformation
-        if not is_reasonable_transform(T_curr_to_prev):
-            # Bad registration can produce a single giant jump that ruins the map.
-            # Fallback to no-motion for this frame to keep reconstruction stable.
-            T_curr_to_prev = np.eye(4)
-
         T_prev_to_world = camera_poses[-1]
         T_curr_to_world = T_prev_to_world @ T_curr_to_prev
         camera_poses.append(T_curr_to_world)
@@ -236,7 +214,6 @@ def reconstruct(args):
         accumulated_pcd = o3d.geometry.PointCloud()
         accumulated_pcd.points = o3d.utility.Vector3dVector(points[keep_mask])
         accumulated_pcd.colors = o3d.utility.Vector3dVector(colors[keep_mask])
-        accumulated_pcd = accumulated_pcd.voxel_down_sample(voxel_size=0.03)
 
     return accumulated_pcd, camera_poses, gt_poses
 
