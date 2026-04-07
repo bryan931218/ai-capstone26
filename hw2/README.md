@@ -34,14 +34,8 @@ numpy==1.26.4
 Use Open3D's built-in ICP algorithm for reconstruction.
 ```bash
 # Reconstruct Floor 1
-python reconstruct.py -f 1 -v open3d
+python reconstruct.py -f 1
 
 # Reconstruct Floor 2
-python reconstruct.py -f 2 -v open3d
-```
-### Bonus Version (Custom ICP Implementation)
-If you have implemented your own ICP algorithm, use the my_icp option.
-```bash
-# Run reconstruction with your own ICP
-python reconstruct.py -f 1 -v my_icp
+python reconstruct.py -f 2
 ```
