@@ -15,13 +15,28 @@ CX, CY = IMG_W / 2.0, IMG_H / 2.0
 DEPTH_SCALE = 1000.0
 
 
+def decode_depth_to_meters(depth_image):
+    """
+    Decode saved depth image into metric depth (meters).
+    Supports:
+    - uint16 millimeter depth (recommended)
+    - uint8 visualization depth saved by old load.py (0~10m mapped to 0~255)
+    """
+    depth_np = np.asarray(depth_image)
+    if depth_np.dtype == np.uint16:
+        return depth_np.astype(np.float32) / DEPTH_SCALE
+    if depth_np.dtype == np.uint8:
+        return depth_np.astype(np.float32) / 255.0 * 10.0
+    return depth_np.astype(np.float32)
+
+
 def depth_image_to_point_cloud(rgb_image, depth_image):
     """
     TASK 1: Geometric Unprojection
     Convert depth pixels (u, v, d) into 3D camera-frame points (x, y, z).
     """
     rgb = np.asarray(rgb_image, dtype=np.float32)
-    depth = np.asarray(depth_image, dtype=np.float32) / DEPTH_SCALE
+    depth = decode_depth_to_meters(depth_image)
 
     v_coords, u_coords = np.indices(depth.shape)
     valid = depth > 1e-6
@@ -30,6 +45,8 @@ def depth_image_to_point_cloud(rgb_image, depth_image):
     u = u_coords[valid]
     v = v_coords[valid]
 
+    # Habitat camera faces -Z in camera frame.
+    z = -z
     x = (u - CX) * z / FX
     y = (v - CY) * z / FY
 
@@ -189,21 +206,24 @@ def reconstruct(args):
 
         t_cur_to_prev = result_icp.transformation
         world_t_prev = camera_poses[-1]
-        world_t_cur = world_t_prev @ np.linalg.inv(t_cur_to_prev)
+        world_t_cur = world_t_prev @ t_cur_to_prev
+        if result_icp.fitness < 0.15:
+            world_t_cur = world_t_prev.copy()
+            print(f"Warning: low ICP fitness ({result_icp.fitness:.4f}), fallback to previous pose.")
         camera_poses.append(world_t_cur)
 
         cur_world = o3d.geometry.PointCloud(cur_pcd)
         cur_world.transform(world_t_cur)
         accumulated_pcd += cur_world
-
         prev_pcd = cur_pcd
         prev_down, prev_fpfh = cur_down, cur_fpfh
 
     points = np.asarray(accumulated_pcd.points)
     colors = np.asarray(accumulated_pcd.colors)
     if len(points) > 0:
-        z_thresh = np.percentile(points[:, 2], 95)
-        keep = points[:, 2] <= z_thresh
+        # Habitat world up-axis is Y; remove top 5% points as ceiling.
+        y_thresh = np.percentile(points[:, 1], 95)
+        keep = points[:, 1] <= y_thresh
         filtered = o3d.geometry.PointCloud()
         filtered.points = o3d.utility.Vector3dVector(points[keep])
         filtered.colors = o3d.utility.Vector3dVector(colors[keep])
