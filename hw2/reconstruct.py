@@ -55,7 +55,8 @@ def depth_image_to_point_cloud(rgb_image, depth_image):
     u = u_coords[valid]
     v = v_coords[valid]
 
-    # Use Open3D's conventional camera frame (+Z forward) for reconstruction.
+    # Habitat camera faces -Z in camera frame.
+    z = -z
     x = (u - CX) * z / FX
     y = (v - CY) * z / FY
 
@@ -175,8 +176,14 @@ def reconstruct(args):
     prev_pcd = depth_image_to_point_cloud(rgb0, depth0)
     prev_down, prev_fpfh = preprocess_point_cloud(prev_pcd, voxel_size)
 
-    camera_poses = [np.eye(4)]
+    if len(gt_poses) > 0:
+        init_pose = gt_poses[0].copy()
+    else:
+        init_pose = np.eye(4)
+
+    camera_poses = [init_pose]
     accumulated_pcd = o3d.geometry.PointCloud(prev_pcd)
+    accumulated_pcd.transform(init_pose)
 
     for i in range(1, min(len(rgb_files), len(depth_files))):
         print(f"Processing Frame {i}...")
