@@ -73,7 +73,28 @@ def preprocess_point_cloud(pcd, voxel_size):
     """
     Pre-processing: Voxelization and Normal Estimation.
     """
-    pcd_down = pcd.voxel_down_sample(voxel_size)
+    pts = np.asarray(pcd.points)
+    cols = np.asarray(pcd.colors)
+    if len(pts) == 0:
+        return o3d.geometry.PointCloud(), o3d.pipelines.registration.Feature()
+
+    # Custom voxel downsampling (no Open3D voxel_down_sample):
+    # group points by voxel index and average xyz/rgb per voxel.
+    voxel_idx = np.floor(pts / voxel_size).astype(np.int64)
+    uniq, inv = np.unique(voxel_idx, axis=0, return_inverse=True)
+
+    counts = np.bincount(inv).astype(np.float64)
+    sum_pts = np.zeros((len(uniq), 3), dtype=np.float64)
+    sum_cols = np.zeros((len(uniq), 3), dtype=np.float64)
+    np.add.at(sum_pts, inv, pts)
+    np.add.at(sum_cols, inv, cols)
+
+    down_pts = sum_pts / counts[:, None]
+    down_cols = sum_cols / counts[:, None]
+
+    pcd_down = o3d.geometry.PointCloud()
+    pcd_down.points = o3d.utility.Vector3dVector(down_pts)
+    pcd_down.colors = o3d.utility.Vector3dVector(down_cols)
 
     radius_normal = voxel_size * 2.0
     pcd_down.estimate_normals(
@@ -108,29 +129,6 @@ def local_icp_algorithm(source_down, target_down, trans_init, threshold):
         trans_init,
         o3d.pipelines.registration.TransformationEstimationPointToPlane(),
     )
-
-
-def project_transform_to_floor(transform):
-    """
-    Project a 6DoF relative transform to a floor-plan motion model:
-    - rotation only around world Y axis (yaw)
-    - no vertical translation
-    """
-    t = np.array(transform, dtype=np.float64, copy=True)
-    r = t[:3, :3]
-    yaw = np.arctan2(r[0, 2], r[2, 2])
-    c, s = np.cos(yaw), np.sin(yaw)
-    r_yaw = np.array(
-        [
-            [c, 0.0, s],
-            [0.0, 1.0, 0.0],
-            [-s, 0.0, c],
-        ],
-        dtype=np.float64,
-    )
-    t[:3, :3] = r_yaw
-    t[1, 3] = 0.0
-    return t
 
 
 def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, args):
@@ -172,7 +170,7 @@ def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, arg
 
 def reconstruct(args):
     voxel_size = 0.10
-    icp_threshold = 0.20
+    icp_threshold = 0.30
 
     rgb_dir = os.path.join(args.data_root, "rgb")
     depth_dir = os.path.join(args.data_root, "depth")
@@ -196,8 +194,7 @@ def reconstruct(args):
 
     rgb0 = o3d.io.read_image(rgb_files[0])
     depth0 = o3d.io.read_image(depth_files[0])
-    prev_pcd = depth_image_to_point_cloud(rgb0, depth0)
-    prev_down, prev_fpfh = preprocess_point_cloud(prev_pcd, voxel_size)
+    first_pcd = depth_image_to_point_cloud(rgb0, depth0)
 
     if len(gt_poses) > 0:
         init_pose = gt_poses[0].copy()
@@ -205,7 +202,7 @@ def reconstruct(args):
         init_pose = np.eye(4)
 
     camera_poses = [init_pose]
-    accumulated_pcd = o3d.geometry.PointCloud(prev_pcd)
+    accumulated_pcd = o3d.geometry.PointCloud(first_pcd)
     accumulated_pcd.transform(init_pose)
 
     for i in range(1, min(len(rgb_files), len(depth_files))):
@@ -216,40 +213,40 @@ def reconstruct(args):
         cur_pcd = depth_image_to_point_cloud(rgb, depth)
         cur_down, cur_fpfh = preprocess_point_cloud(cur_pcd, voxel_size)
 
-        if args.version == "my_icp":
-            result_icp = my_local_icp_algorithm(cur_down, prev_down, np.eye(4))
-        else:
-            # Adjacent frames are usually close; start from identity to avoid bad global matches.
-            result_icp = local_icp_algorithm(
-                cur_down,
-                prev_down,
-                np.eye(4),
-                icp_threshold,
-            )
+        # Use accumulated world map as registration target to reduce drift.
+        map_down, map_fpfh = preprocess_point_cloud(accumulated_pcd, voxel_size)
+        if len(map_down.points) < 100:
+            camera_poses.append(camera_poses[-1].copy())
+            print(f"Warning: map too sparse at frame {i}, skip.")
+            continue
 
-        # If direct ICP is weak, recover with global RANSAC initialization once.
-        if result_icp.fitness < 0.30 and args.version != "my_icp":
-            distance_threshold = voxel_size * 2.0
-            result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
-                cur_down,
-                prev_down,
-                cur_fpfh,
-                prev_fpfh,
-                mutual_filter=True,
-                max_correspondence_distance=distance_threshold,
-                estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
-                ransac_n=4,
-                checkers=[
-                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
-                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
-                ],
-                criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(50000, 0.999),
-            )
+        # Pipeline order (required):
+        # Unprojection -> Voxelization -> Global RANSAC -> Local ICP
+        distance_threshold = voxel_size * 1.5
+        result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+            cur_down,
+            map_down,
+            cur_fpfh,
+            map_fpfh,
+            mutual_filter=True,
+            max_correspondence_distance=distance_threshold,
+            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+            ransac_n=4,
+            checkers=[
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
+            ],
+            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999),
+        )
+
+        if args.version == "my_icp":
+            result_icp = my_local_icp_algorithm(cur_down, map_down, result_ransac.transformation)
+        else:
             result_icp = local_icp_algorithm(
                 cur_down,
-                prev_down,
+                map_down,
                 result_ransac.transformation,
-                icp_threshold * 1.5,
+                icp_threshold,
             )
 
         is_good_match = result_icp.fitness >= 0.20
@@ -260,16 +257,12 @@ def reconstruct(args):
             )
             continue
 
-        t_cur_to_prev = project_transform_to_floor(result_icp.transformation)
-        world_t_prev = camera_poses[-1]
-        world_t_cur = world_t_prev @ t_cur_to_prev
+        world_t_cur = result_icp.transformation
         camera_poses.append(world_t_cur)
 
         cur_world = o3d.geometry.PointCloud(cur_pcd)
         cur_world.transform(world_t_cur)
         accumulated_pcd += cur_world
-        prev_pcd = cur_pcd
-        prev_down, prev_fpfh = cur_down, cur_fpfh
 
     points = np.asarray(accumulated_pcd.points)
     colors = np.asarray(accumulated_pcd.colors)
