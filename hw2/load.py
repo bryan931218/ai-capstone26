@@ -39,6 +39,10 @@ def transform_depth(image):
     depth_img = (image / 10 * 255).astype(np.uint8)
     return depth_img
 
+def encode_depth_mm(image):
+    depth_mm = np.clip(image * 1000.0, 0, np.iinfo(np.uint16).max).astype(np.uint16)
+    return depth_mm
+
 def transform_semantic(semantic_obs):
     semantic_img = Image.new("P", (semantic_obs.shape[1], semantic_obs.shape[0]))
     semantic_img.putpalette(d3_40_colors_rgb.flatten())
@@ -106,7 +110,8 @@ def navigateAndSee(action="", data_root='data_collection/second_floor/'):
     
     count += 1
     cv2.imwrite(data_root + f"rgb/{count}.png", transform_rgb_bgr(observations["color_sensor"]))
-    cv2.imwrite(data_root + f"depth/{count}.png", transform_depth(observations["depth_sensor"]))
+    # Save metric depth for reconstruction (uint16, unit: mm).
+    cv2.imwrite(data_root + f"depth/{count}.png", encode_depth_mm(observations["depth_sensor"]))
     cv2.imwrite(data_root + f"semantic/{count}.png", transform_semantic(observations["semantic_sensor"]))
     
     cam_extr.append([sensor_state.position[0], sensor_state.position[1], sensor_state.position[2], 
