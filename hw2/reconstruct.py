@@ -149,7 +149,7 @@ def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, arg
 
 def reconstruct(args):
     voxel_size = 0.10
-    icp_threshold = 0.30
+    icp_threshold = 0.20
 
     rgb_dir = os.path.join(args.data_root, "rgb")
     depth_dir = os.path.join(args.data_root, "depth")
@@ -193,39 +193,53 @@ def reconstruct(args):
         cur_pcd = depth_image_to_point_cloud(rgb, depth)
         cur_down, cur_fpfh = preprocess_point_cloud(cur_pcd, voxel_size)
 
-        distance_threshold = voxel_size * 1.5
-        result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
-            cur_down,
-            prev_down,
-            cur_fpfh,
-            prev_fpfh,
-            mutual_filter=True,
-            max_correspondence_distance=distance_threshold,
-            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
-            ransac_n=4,
-            checkers=[
-                o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
-                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
-            ],
-            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999),
-        )
-
         if args.version == "my_icp":
-            result_icp = my_local_icp_algorithm(cur_down, prev_down, result_ransac.transformation)
+            result_icp = my_local_icp_algorithm(cur_down, prev_down, np.eye(4))
         else:
+            # Adjacent frames are usually close; start from identity to avoid bad global matches.
+            result_icp = local_icp_algorithm(
+                cur_down,
+                prev_down,
+                np.eye(4),
+                icp_threshold,
+            )
+
+        # If direct ICP is weak, recover with global RANSAC initialization once.
+        if result_icp.fitness < 0.30 and args.version != "my_icp":
+            distance_threshold = voxel_size * 2.0
+            result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+                cur_down,
+                prev_down,
+                cur_fpfh,
+                prev_fpfh,
+                mutual_filter=True,
+                max_correspondence_distance=distance_threshold,
+                estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+                ransac_n=4,
+                checkers=[
+                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
+                ],
+                criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(50000, 0.999),
+            )
             result_icp = local_icp_algorithm(
                 cur_down,
                 prev_down,
                 result_ransac.transformation,
-                icp_threshold,
+                icp_threshold * 1.5,
             )
+
+        is_good_match = result_icp.fitness >= 0.20
+        if not is_good_match:
+            camera_poses.append(camera_poses[-1].copy())
+            print(
+                f"Warning: reject frame {i} (ICP fitness={result_icp.fitness:.4f}, rmse={result_icp.inlier_rmse:.4f})"
+            )
+            continue
 
         t_cur_to_prev = result_icp.transformation
         world_t_prev = camera_poses[-1]
         world_t_cur = world_t_prev @ t_cur_to_prev
-        if result_icp.fitness < 0.15:
-            world_t_cur = world_t_prev.copy()
-            print(f"Warning: low ICP fitness ({result_icp.fitness:.4f}), fallback to previous pose.")
         camera_poses.append(world_t_cur)
 
         cur_world = o3d.geometry.PointCloud(cur_pcd)
