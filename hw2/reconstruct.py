@@ -169,8 +169,9 @@ def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, arg
 
 
 def reconstruct(args):
-    voxel_size = 0.10
+    voxel_size = 0.12
     icp_threshold = 0.30
+    keyframe_update_interval = 5
 
     rgb_dir = os.path.join(args.data_root, "rgb")
     depth_dir = os.path.join(args.data_root, "depth")
@@ -204,8 +205,11 @@ def reconstruct(args):
     camera_poses = [init_pose]
     accumulated_pcd = o3d.geometry.PointCloud(first_pcd)
     accumulated_pcd.transform(init_pose)
+    map_down, map_fpfh = preprocess_point_cloud(accumulated_pcd, voxel_size)
+    accepted_since_ref_update = 0
 
-    for i in range(1, min(len(rgb_files), len(depth_files))):
+    frame_stride = max(1, int(args.frame_stride))
+    for i in range(1, min(len(rgb_files), len(depth_files)), frame_stride):
         print(f"Processing Frame {i}...")
 
         rgb = o3d.io.read_image(rgb_files[i])
@@ -213,8 +217,6 @@ def reconstruct(args):
         cur_pcd = depth_image_to_point_cloud(rgb, depth)
         cur_down, cur_fpfh = preprocess_point_cloud(cur_pcd, voxel_size)
 
-        # Use accumulated world map as registration target to reduce drift.
-        map_down, map_fpfh = preprocess_point_cloud(accumulated_pcd, voxel_size)
         if len(map_down.points) < 100:
             camera_poses.append(camera_poses[-1].copy())
             print(f"Warning: map too sparse at frame {i}, skip.")
@@ -236,7 +238,7 @@ def reconstruct(args):
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold),
             ],
-            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999),
+            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(20000, 0.999),
         )
 
         if args.version == "my_icp":
@@ -263,6 +265,11 @@ def reconstruct(args):
         cur_world = o3d.geometry.PointCloud(cur_pcd)
         cur_world.transform(world_t_cur)
         accumulated_pcd += cur_world
+        accepted_since_ref_update += 1
+
+        if accepted_since_ref_update >= keyframe_update_interval:
+            map_down, map_fpfh = preprocess_point_cloud(accumulated_pcd, voxel_size)
+            accepted_since_ref_update = 0
 
     points = np.asarray(accumulated_pcd.points)
     colors = np.asarray(accumulated_pcd.colors)
@@ -282,6 +289,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-f', '--floor', type=int, default=1)
     parser.add_argument('-v', '--version', type=str, default='open3d', help='open3d or my_icp')
+    parser.add_argument('--frame_stride', type=int, default=1, help='Process every N-th frame')
     args = parser.parse_args()
 
     args.data_root = (
