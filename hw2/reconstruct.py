@@ -110,6 +110,29 @@ def local_icp_algorithm(source_down, target_down, trans_init, threshold):
     )
 
 
+def project_transform_to_floor(transform):
+    """
+    Project a 6DoF relative transform to a floor-plan motion model:
+    - rotation only around world Y axis (yaw)
+    - no vertical translation
+    """
+    t = np.array(transform, dtype=np.float64, copy=True)
+    r = t[:3, :3]
+    yaw = np.arctan2(r[0, 2], r[2, 2])
+    c, s = np.cos(yaw), np.sin(yaw)
+    r_yaw = np.array(
+        [
+            [c, 0.0, s],
+            [0.0, 1.0, 0.0],
+            [-s, 0.0, c],
+        ],
+        dtype=np.float64,
+    )
+    t[:3, :3] = r_yaw
+    t[1, 3] = 0.0
+    return t
+
+
 def visualize_and_evaluate(reconstructed_pcd, predicted_cam_poses, gt_poses, args):
     """
     TASK 3: Evaluation & Visualization
@@ -237,7 +260,7 @@ def reconstruct(args):
             )
             continue
 
-        t_cur_to_prev = result_icp.transformation
+        t_cur_to_prev = project_transform_to_floor(result_icp.transformation)
         world_t_prev = camera_poses[-1]
         world_t_cur = world_t_prev @ t_cur_to_prev
         camera_poses.append(world_t_cur)
