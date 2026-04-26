@@ -35,7 +35,7 @@ SEMANTIC_DICTS = {
 
 
 def pick_goal(map_img) -> Tuple[str, Tuple[int, int]]:
-    prompt = "Enter semantic destination (ex: 'rack', 'cooktop', 'sofa'): "
+    prompt = "Enter semantic destination (ex: 'rack', 'cushion', 'sofa', 'stair', 'cooktop'): "
     goal_prompt = input(prompt).strip().lower()
     if goal_prompt not in SEMANTIC_DICTS["colors"]:
         print(f"Goal '{goal_prompt}' is not valid.")
@@ -58,8 +58,8 @@ def plan_path(
     start: Tuple[int, int],
     goal: Tuple[int, int],
     occupancy_map: np.ndarray,
-    max_iter: int = 10000,
-    step_size: int = 5,
+    max_iter: int = 20000,
+    step_size: int = 25,
 ) -> List[Tuple[int, int]]:
     """RRT path planner in pixel space. Returns path as list of (col, row) tuples."""
     # =============== TODO 2 ===============
@@ -190,7 +190,7 @@ def visualize_path(
     """Visualize the planned RRT path over the 2D semantic map using matplotlib."""
     # =============== TODO 3 ===============
     fig, ax = plt.subplots(figsize=(12, 8))
-    ax.imshow(map_img)
+    ax.imshow(map_img, origin='lower')
 
     if path:
         cols = [p[0] for p in path]
