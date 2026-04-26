@@ -4,10 +4,18 @@ import numpy as np
 from typing import List, Tuple
 
 SCALE_FACTOR = 10000.0 / 255.0
-CEILING_COLOR = np.array([8, 255, 214])
-FLOOR_COLOR = np.array([255, 194, 7])
 RESOLUTION = 40   # pixels per meter
 PADDING = 20      # pixel padding around map edges
+FLOOR_HEIGHT_MAX = -1.4
+CEILING_HEIGHT_PERCENTILE = 55
+SEMANTIC_MAP_PATH = "semantic_map.png"
+
+
+def save_map_outputs(map_img: np.ndarray, occupancy_map: np.ndarray) -> None:
+    """Save the colored semantic map."""
+    rendered = np.clip(map_img * 255, 0, 255).astype(np.uint8)
+    rendered_bgr = cv2.cvtColor(rendered, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(SEMANTIC_MAP_PATH, rendered_bgr)
 
 
 def load_and_filter_map(point_path: str, color_path: str):
@@ -18,13 +26,15 @@ def load_and_filter_map(point_path: str, color_path: str):
     coords = points * SCALE_FACTOR
 
     # =============== TODO 1-1 ===============
-    # 1. Identify floor and ceiling by color (tolerance 5 per channel)
-    floor_mask = np.all(np.abs(colors - FLOOR_COLOR) <= 5, axis=1)
-    ceiling_mask = np.all(np.abs(colors - CEILING_COLOR) <= 5, axis=1)
-    obj_mask = ~(floor_mask | ceiling_mask)
+    # 1. Filter floor and ceiling by vertical height.
+    #    In Habitat: x-z plane is horizontal, y is vertical.
+    heights = coords[:, 1]
+    ceiling_height_min = np.percentile(heights, CEILING_HEIGHT_PERCENTILE)
+    floor_mask = heights <= FLOOR_HEIGHT_MAX
+    ceiling_mask = heights >= ceiling_height_min
+    obj_mask = (heights > FLOOR_HEIGHT_MAX) & (heights < ceiling_height_min)
 
     # 2. Compute 2D grid bounds from ALL points (including floor) with padding
-    #    In Habitat: x-z plane is horizontal, y is vertical.
     #    Mapping: z_world → col (image x-axis), x_world → row (image y-axis)
     all_x = coords[:, 0]
     all_z = coords[:, 2]
@@ -36,7 +46,7 @@ def load_and_filter_map(point_path: str, color_path: str):
     H = int((x_max - x_min) * RESOLUTION) + 1
     W = int((z_max - z_min) * RESOLUTION) + 1
 
-    # 3. Project non-floor/ceiling points to pixel grid
+    # 3. Project height-filtered object points to pixel grid
     obj_x = coords[obj_mask, 0]
     obj_z = coords[obj_mask, 2]
     obj_rgb = colors[obj_mask]
@@ -66,7 +76,7 @@ def load_and_filter_map(point_path: str, color_path: str):
     # already removed in step 5 is not re-introduced via point-cloud lookup.
     # Dilate obstacles by 1 px (3×3 ellipse) to make 1-pixel-wide walls thick
     # enough for reliable line-segment collision checks.
-    # Floor footprint with generous dilation to fill entire rooms.
+    # Low-height footprint with generous dilation to fill entire rooms.
     floor_col = np.clip(((coords[floor_mask, 2] - z_min) * RESOLUTION).astype(int), 0, W - 1)
     floor_row = np.clip(((coords[floor_mask, 0] - x_min) * RESOLUTION).astype(int), 0, H - 1)
     floor_occ = np.zeros((H, W), dtype=np.uint8)
@@ -83,6 +93,8 @@ def load_and_filter_map(point_path: str, color_path: str):
     occupancy_map = np.ones((H, W), dtype=np.uint8)
     occupancy_map[floor_dilated == 1] = 0
     occupancy_map[obs_occ == 1] = 1
+
+    save_map_outputs(map_img, occupancy_map)
 
     return map_img, occupancy_map, x_min, z_min, float(RESOLUTION)
 
