@@ -7,6 +7,7 @@ import numpy as np
 SCALE_FACTOR = 10000.0 / 255.0
 CEILING_COLOR = np.array([8, 255, 214])
 FLOOR_COLOR = np.array([255, 194, 7])
+ALT_FLOOR_COLORS = (np.array([255, 184, 6]),)
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,13 @@ def _color_mask(colors: np.ndarray, target: np.ndarray, tolerance: float = 1.0) 
     return np.all(np.abs(colors - target.reshape(1, 3)) <= tolerance, axis=1)
 
 
+def _multi_color_mask(colors: np.ndarray, targets: List[np.ndarray], tolerance: float = 1.0) -> np.ndarray:
+    mask = np.zeros(colors.shape[0], dtype=bool)
+    for target in targets:
+        mask |= _color_mask(colors, target, tolerance=tolerance)
+    return mask
+
+
 def _points_to_pixels(coords: np.ndarray, meta: MapMeta) -> Tuple[np.ndarray, np.ndarray]:
     px = np.rint((coords[:, 0] - meta.min_x) / meta.resolution).astype(np.int32)
     py = np.rint((meta.max_z - coords[:, 2]) / meta.resolution).astype(np.int32)
@@ -35,8 +43,9 @@ def _points_to_pixels(coords: np.ndarray, meta: MapMeta) -> Tuple[np.ndarray, np
 def load_and_filter_map(
     point_path: str,
     color_path: str,
-    resolution: float = 0.04,
-    obstacle_inflation: int = 2,
+    resolution: float = 0.02,
+    obstacle_inflation: int = 1,
+    min_obstacle_area: int = 2,
 ):
     points = np.load(point_path)
     colors = np.load(color_path)
@@ -46,7 +55,7 @@ def load_and_filter_map(
     # Convert to real-world meters. In Habitat, x-z is horizontal and y is vertical.
     coords = points * SCALE_FACTOR
 
-    floor_mask = _color_mask(colors, FLOOR_COLOR)
+    floor_mask = _multi_color_mask(colors, [FLOOR_COLOR, *ALT_FLOOR_COLORS])
     ceiling_mask = _color_mask(colors, CEILING_COLOR)
     obstacle_mask = ~(floor_mask | ceiling_mask)
 
@@ -60,19 +69,31 @@ def load_and_filter_map(
 
     floor_grid = np.zeros((height, width), dtype=np.uint8)
     obstacle_grid = np.zeros((height, width), dtype=np.uint8)
-    map_img = np.full((height, width, 3), 0.18, dtype=np.float32)
+    map_img = np.ones((height, width, 3), dtype=np.float32)
+    obstacle_color_img = np.zeros((height, width, 3), dtype=np.float32)
 
     fx, fy = _points_to_pixels(coords[floor_mask], meta)
     floor_grid[fy, fx] = 255
-    map_img[fy, fx] = np.array([0.92, 0.92, 0.92], dtype=np.float32)
 
     ox, oy = _points_to_pixels(coords[obstacle_mask], meta)
     obstacle_grid[oy, ox] = 255
-    map_img[oy, ox] = colors[obstacle_mask].astype(np.float32) / 255.0
+    obstacle_color_img[oy, ox] = colors[obstacle_mask].astype(np.float32) / 255.0
+    raw_obstacle_grid = obstacle_grid.copy()
 
     close_kernel = np.ones((5, 5), dtype=np.uint8)
     floor_grid = cv2.morphologyEx(floor_grid, cv2.MORPH_CLOSE, close_kernel, iterations=2)
     obstacle_grid = cv2.morphologyEx(obstacle_grid, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8))
+    obstacle_grid = cv2.morphologyEx(obstacle_grid, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8))
+
+    # Remove tiny obstacle speckles from point-cloud noise. Those speckles can be
+    # inflated into doorway blockers even though they are not real geometry.
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(obstacle_grid, connectivity=8)
+    cleaned_obstacles = np.zeros_like(obstacle_grid)
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area >= min_obstacle_area:
+            cleaned_obstacles[labels == label] = 255
+    obstacle_grid = cleaned_obstacles
 
     inflate_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (obstacle_inflation * 2 + 1, obstacle_inflation * 2 + 1)
@@ -81,6 +102,10 @@ def load_and_filter_map(
 
     # True means blocked. Anything outside observed floor is blocked.
     occupancy_map = (floor_grid == 0) | (inflated_obstacles > 0)
+
+    # Use raw semantic obstacle points for visualization so objects/walls remain
+    # visible even if denoising removes them from occupancy planning.
+    map_img[raw_obstacle_grid > 0] = obstacle_color_img[raw_obstacle_grid > 0]
     cv2.imwrite("semantic_map.png", cv2.cvtColor((map_img * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
     return map_img, occupancy_map, meta
 
