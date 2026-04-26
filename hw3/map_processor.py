@@ -6,14 +6,15 @@ from typing import List, Tuple
 SCALE_FACTOR = 10000.0 / 255.0
 RESOLUTION = 40   # pixels per meter
 PADDING = 20      # pixel padding around map edges
-FLOOR_HEIGHT_MAX = -1.4
+FLOOR_HEIGHT_MAX = -1.3
 CEILING_HEIGHT_PERCENTILE = 55
 SEMANTIC_MAP_PATH = "semantic_map.png"
 
 
 def save_map_outputs(map_img: np.ndarray, occupancy_map: np.ndarray) -> None:
     """Save the colored semantic map."""
-    rendered = np.clip(map_img * 255, 0, 255).astype(np.uint8)
+    # Flip the image vertically before saving with OpenCV to match 'origin=lower' in Matplotlib.
+    rendered = np.clip(np.flipud(map_img) * 255, 0, 255).astype(np.uint8)
     rendered_bgr = cv2.cvtColor(rendered, cv2.COLOR_RGB2BGR)
     cv2.imwrite(SEMANTIC_MAP_PATH, rendered_bgr)
 
@@ -102,7 +103,7 @@ def load_and_filter_map(point_path: str, color_path: str):
 def select_start(map_img: np.ndarray) -> Tuple[int, int]:
     """Display map with matplotlib and return user-clicked start coordinate."""
     fig, ax = plt.subplots(figsize=(12, 8))
-    ax.imshow(map_img)
+    ax.imshow(map_img, origin='lower') # Ensure user interaction map is also upside down
     ax.set_title("Click to select start location, then press Enter")
     fig.tight_layout()
 
