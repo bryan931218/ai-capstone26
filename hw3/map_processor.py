@@ -7,6 +7,7 @@ import numpy as np
 SCALE_FACTOR = 10000.0 / 255.0
 CEILING_COLOR = np.array([8, 255, 214])
 FLOOR_COLOR = np.array([255, 194, 7])
+ALT_FLOOR_COLORS = (np.array([255, 184, 6]),)
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,13 @@ class MapMeta:
 
 def _color_mask(colors: np.ndarray, target: np.ndarray, tolerance: float = 1.0) -> np.ndarray:
     return np.all(np.abs(colors - target.reshape(1, 3)) <= tolerance, axis=1)
+
+
+def _multi_color_mask(colors: np.ndarray, targets: List[np.ndarray], tolerance: float = 1.0) -> np.ndarray:
+    mask = np.zeros(colors.shape[0], dtype=bool)
+    for target in targets:
+        mask |= _color_mask(colors, target, tolerance=tolerance)
+    return mask
 
 
 def _points_to_pixels(coords: np.ndarray, meta: MapMeta) -> Tuple[np.ndarray, np.ndarray]:
@@ -47,7 +55,7 @@ def load_and_filter_map(
     # Convert to real-world meters. In Habitat, x-z is horizontal and y is vertical.
     coords = points * SCALE_FACTOR
 
-    floor_mask = _color_mask(colors, FLOOR_COLOR)
+    floor_mask = _multi_color_mask(colors, [FLOOR_COLOR, *ALT_FLOOR_COLORS])
     ceiling_mask = _color_mask(colors, CEILING_COLOR)
     obstacle_mask = ~(floor_mask | ceiling_mask)
 
@@ -61,15 +69,15 @@ def load_and_filter_map(
 
     floor_grid = np.zeros((height, width), dtype=np.uint8)
     obstacle_grid = np.zeros((height, width), dtype=np.uint8)
-    map_img = np.full((height, width, 3), 0.18, dtype=np.float32)
+    map_img = np.ones((height, width, 3), dtype=np.float32)
+    obstacle_color_img = np.zeros((height, width, 3), dtype=np.float32)
 
     fx, fy = _points_to_pixels(coords[floor_mask], meta)
     floor_grid[fy, fx] = 255
-    map_img[fy, fx] = np.array([0.92, 0.92, 0.92], dtype=np.float32)
 
     ox, oy = _points_to_pixels(coords[obstacle_mask], meta)
     obstacle_grid[oy, ox] = 255
-    map_img[oy, ox] = colors[obstacle_mask].astype(np.float32) / 255.0
+    obstacle_color_img[oy, ox] = colors[obstacle_mask].astype(np.float32) / 255.0
 
     close_kernel = np.ones((5, 5), dtype=np.uint8)
     floor_grid = cv2.morphologyEx(floor_grid, cv2.MORPH_CLOSE, close_kernel, iterations=2)
@@ -84,6 +92,7 @@ def load_and_filter_map(
         if area >= min_obstacle_area:
             cleaned_obstacles[labels == label] = 255
     obstacle_grid = cleaned_obstacles
+    map_img[obstacle_grid > 0] = obstacle_color_img[obstacle_grid > 0]
 
     inflate_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (obstacle_inflation * 2 + 1, obstacle_inflation * 2 + 1)
