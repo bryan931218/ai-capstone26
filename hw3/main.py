@@ -212,6 +212,7 @@ def main():
     print("=== Step 1: Processing the 3D Map ===")
     # =============== TODO 1-2 ===============
     map_img, occupancy_map, x_min, z_min, resolution = load_and_filter_map(POINT_CLOUD_DATA, COLOR_DATA)
+    print("Saved semantic_map.png")
 
     print("=== Step 2: Selecting Agent Start and Goal Positions ===")
     start = select_start(map_img)
