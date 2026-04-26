@@ -43,9 +43,9 @@ def _points_to_pixels(coords: np.ndarray, meta: MapMeta) -> Tuple[np.ndarray, np
 def load_and_filter_map(
     point_path: str,
     color_path: str,
-    resolution: float = 0.04,
+    resolution: float = 0.02,
     obstacle_inflation: int = 1,
-    min_obstacle_area: int = 6,
+    min_obstacle_area: int = 2,
 ):
     points = np.load(point_path)
     colors = np.load(color_path)
@@ -82,6 +82,18 @@ def load_and_filter_map(
     close_kernel = np.ones((5, 5), dtype=np.uint8)
     floor_grid = cv2.morphologyEx(floor_grid, cv2.MORPH_CLOSE, close_kernel, iterations=2)
     obstacle_grid = cv2.morphologyEx(obstacle_grid, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8))
+    obstacle_grid = cv2.morphologyEx(obstacle_grid, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8))
+
+    # Remove tiny obstacle speckles from point-cloud noise. Those speckles can be
+    # inflated into doorway blockers even though they are not real geometry.
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(obstacle_grid, connectivity=8)
+    cleaned_obstacles = np.zeros_like(obstacle_grid)
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area >= min_obstacle_area:
+            cleaned_obstacles[labels == label] = 255
+    obstacle_grid = cleaned_obstacles
+    map_img[obstacle_grid > 0] = obstacle_color_img[obstacle_grid > 0]
 
     # Remove tiny obstacle speckles from point-cloud noise. Those speckles can be
     # inflated into doorway blockers even though they are not real geometry.
