@@ -95,6 +95,17 @@ def load_and_filter_map(
     obstacle_grid = cleaned_obstacles
     map_img[obstacle_grid > 0] = obstacle_color_img[obstacle_grid > 0]
 
+    # Remove tiny obstacle speckles from point-cloud noise. Those speckles can be
+    # inflated into doorway blockers even though they are not real geometry.
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(obstacle_grid, connectivity=8)
+    cleaned_obstacles = np.zeros_like(obstacle_grid)
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area >= min_obstacle_area:
+            cleaned_obstacles[labels == label] = 255
+    obstacle_grid = cleaned_obstacles
+    map_img[obstacle_grid > 0] = obstacle_color_img[obstacle_grid > 0]
+
     inflate_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (obstacle_inflation * 2 + 1, obstacle_inflation * 2 + 1)
     )
