@@ -43,7 +43,7 @@ def _points_to_pixels(coords: np.ndarray, meta: MapMeta) -> Tuple[np.ndarray, np
 def load_and_filter_map(
     point_path: str,
     color_path: str,
-    resolution: float = 0.04,
+    resolution: float = 0.02,
     obstacle_inflation: int = 1,
     min_obstacle_area: int = 2,
 ):
