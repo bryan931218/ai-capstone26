@@ -4,8 +4,57 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 from PIL import Image
-import habitat_sim
-from habitat_sim.utils.common import d3_40_colors_rgb
+
+try:
+    import habitat_sim
+    from habitat_sim.utils.common import d3_40_colors_rgb
+except ModuleNotFoundError:
+    habitat_sim = None
+    d3_40_colors_rgb = np.array(
+        [
+            [0, 0, 0],
+            [230, 25, 75],
+            [60, 180, 75],
+            [255, 225, 25],
+            [0, 130, 200],
+            [245, 130, 48],
+            [145, 30, 180],
+            [70, 240, 240],
+            [240, 50, 230],
+            [210, 245, 60],
+            [250, 190, 190],
+            [0, 128, 128],
+            [230, 190, 255],
+            [170, 110, 40],
+            [255, 250, 200],
+            [128, 0, 0],
+            [170, 255, 195],
+            [128, 128, 0],
+            [255, 215, 180],
+            [0, 0, 128],
+            [128, 128, 128],
+            [255, 255, 255],
+            [20, 20, 20],
+            [120, 120, 120],
+            [220, 20, 60],
+            [20, 220, 60],
+            [60, 20, 220],
+            [220, 160, 20],
+            [160, 20, 220],
+            [20, 220, 160],
+            [160, 160, 20],
+            [20, 160, 160],
+            [160, 20, 160],
+            [80, 80, 80],
+            [80, 0, 0],
+            [0, 80, 0],
+            [0, 0, 80],
+            [80, 80, 0],
+            [80, 0, 80],
+            [0, 80, 80],
+        ],
+        dtype=np.uint8,
+    )
 
 SCENE_PATH = "../hw0/replica_v1/apartment_0/habitat/mesh_semantic.ply"
 SENSOR_HEIGHT = 1.5
@@ -45,6 +94,12 @@ def _transform_semantic(semantic_obs: np.ndarray) -> np.ndarray:
 # =============================
 def init_sim(scene_path: str = SCENE_PATH, start_x: float = 0.9, start_z: float = 4.6):
     """Initialize the Habitat simulator environment and set the agent's start state."""
+    if habitat_sim is None:
+        raise ModuleNotFoundError(
+            "habitat_sim is not installed in this Python environment. "
+            "Install Habitat-Sim and make sure SCENE_PATH points to apartment_0 before running Part 3."
+        )
+
     sim_settings = {
         "scene": scene_path,
         "default_agent": 0,
