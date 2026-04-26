@@ -8,6 +8,9 @@ CEILING_COLOR = np.array([8, 255, 214])
 FLOOR_COLOR = np.array([255, 194, 7])
 MAP_RESOLUTION_M = 0.025  # meters / pixel
 COLOR_TOL = 10.0
+CANVAS_H = 500
+CANVAS_W = 650
+MARGIN = 20
 
 
 def load_and_filter_map(point_path: str, color_path: str):
@@ -38,26 +41,37 @@ def load_and_filter_map(point_path: str, color_path: str):
     if len(coords_keep) == 0:
         raise RuntimeError("All points were filtered out. Please check filtering thresholds.")
 
-    # Project to x-z plane and rasterize.
-    xs_world = coords_keep[:, 0]
-    zs_world = coords_keep[:, 2]
-    x_min, x_max = xs_world.min(), xs_world.max()
-    z_min, z_max = zs_world.min(), zs_world.max()
+    # Project to x-z plane and rasterize with UNIFORM scale (avoid aspect distortion).
+    # Use -z for a more standard top-down orientation.
+    bev_x = coords_keep[:, 0]
+    bev_y = -coords_keep[:, 2]
+    x_min, x_max = bev_x.min(), bev_x.max()
+    y_min, y_max = bev_y.min(), bev_y.max()
 
-    width = int(np.ceil((x_max - x_min) / MAP_RESOLUTION_M)) + 1
-    height = int(np.ceil((z_max - z_min) / MAP_RESOLUTION_M)) + 1
+    x_span = max(x_max - x_min, 1e-6)
+    y_span = max(y_max - y_min, 1e-6)
+    scale = min((CANVAS_W - 2 * MARGIN) / x_span, (CANVAS_H - 2 * MARGIN) / y_span)
 
-    px = np.clip(((xs_world - x_min) / MAP_RESOLUTION_M).astype(np.int32), 0, width - 1)
-    pz = np.clip(((zs_world - z_min) / MAP_RESOLUTION_M).astype(np.int32), 0, height - 1)
+    px = ((bev_x - x_min) * scale + MARGIN).astype(np.int32)
+    py = ((bev_y - y_min) * scale + MARGIN).astype(np.int32)
+    py = CANVAS_H - 1 - py  # image y-axis points down
 
     # Build semantic/color map with mean color per pixel.
-    color_sum = np.zeros((height, width, 3), dtype=np.float64)
-    hit_count = np.zeros((height, width), dtype=np.float64)
-    np.add.at(color_sum, (pz, px, slice(None)), colors_keep)
-    np.add.at(hit_count, (pz, px), 1.0)
+    valid_in_canvas = (
+        (px >= 0) & (px < CANVAS_W) &
+        (py >= 0) & (py < CANVAS_H)
+    )
+    px = px[valid_in_canvas]
+    py = py[valid_in_canvas]
+    colors_keep = colors_keep[valid_in_canvas]
+
+    color_sum = np.zeros((CANVAS_H, CANVAS_W, 3), dtype=np.float64)
+    hit_count = np.zeros((CANVAS_H, CANVAS_W), dtype=np.float64)
+    np.add.at(color_sum, (py, px, slice(None)), colors_keep)
+    np.add.at(hit_count, (py, px), 1.0)
 
     valid = hit_count > 0
-    map_img = np.ones((height, width, 3), dtype=np.float32)
+    map_img = np.ones((CANVAS_H, CANVAS_W, 3), dtype=np.float32)
     map_img[valid] = (color_sum[valid] / hit_count[valid, None]) / 255.0
     map_img = np.clip(map_img, 0.0, 1.0)
 
@@ -74,7 +88,16 @@ def load_and_filter_map(point_path: str, color_path: str):
     occupancy_map = ndimage.binary_dilation(obstacle_clean, structure=disk)
     occupancy_map = occupancy_map.astype(np.uint8)
 
-    return map_img, occupancy_map, x_min, z_min, MAP_RESOLUTION_M
+    transform = {
+        "bev_x_min": float(x_min),
+        "bev_y_min": float(y_min),
+        "scale": float(scale),
+        "margin": int(MARGIN),
+        "canvas_h": int(CANVAS_H),
+        "use_neg_z": True,   # bev_y = -world_z
+        "flip_image_y": True,
+    }
+    return map_img, occupancy_map, transform
 
 
 def select_start(map_img: np.ndarray) -> Tuple[int, int]:

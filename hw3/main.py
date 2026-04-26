@@ -174,7 +174,7 @@ def main():
 
     print("=== Step 1: Processing the 3D Map ===")
     # =============== TODO 1-2 ===============
-    map_img, occupancy_map, x_min, z_min, map_resolution = load_and_filter_map(POINT_CLOUD_DATA, COLOR_DATA)
+    map_img, occupancy_map, transform = load_and_filter_map(POINT_CLOUD_DATA, COLOR_DATA)
 
 
     print("=== Step 2: Selecting Agent Start and Goal Positions ===")
@@ -202,7 +202,18 @@ def main():
     # =============== TODO 4 ===============
     # Convert pixel path to world coordinates
     # world_path is a list of tuples(float, float) representing waypoints in world coordinates
-    world_path = [(x_min + px * map_resolution, z_min + pz * map_resolution) for (px, pz) in path]
+    world_path = []
+    for px, py_img in path:
+        py = py_img
+        if transform["flip_image_y"]:
+            py = transform["canvas_h"] - 1 - py
+
+        bev_x = (px - transform["margin"]) / transform["scale"] + transform["bev_x_min"]
+        bev_y = (py - transform["margin"]) / transform["scale"] + transform["bev_y_min"]
+
+        world_x = bev_x
+        world_z = -bev_y if transform["use_neg_z"] else bev_y
+        world_path.append((world_x, world_z))
 
     run_in_sim(world_path[0], world_path, goal_prompt)
 
