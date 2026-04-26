@@ -37,11 +37,11 @@ SEMANTIC_DICTS = {
         "cooktop": [[7, 255, 224]],
     },
     "indices": {
-        "rack": 8,
-        "cushion": None,
-        "sofa": 196,
-        "stair": None,
-        "cooktop": 280,
+        "rack": 66,
+        "cushion": 29,
+        "sofa": 76,
+        "stair": 77,
+        "cooktop": 32,
     },
 }
 
